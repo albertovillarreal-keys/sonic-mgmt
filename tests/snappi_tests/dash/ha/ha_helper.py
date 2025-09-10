@@ -1,4 +1,5 @@
 from tabulate import tabulate
+from tests.common.reboot import reboot
 from tests.common.utilities import (wait, wait_until)  # noqa F401
 from tests.common.helpers.assertions import pytest_assert  # noqa F401
 from tests.common.snappi_tests.uhd.uhd_helpers import NetworkConfigSettings  # noqa: F403, F401
@@ -12,7 +13,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def run_ha_test(duthost, tbinfo, ha_test_case, config_snappi_l47):
+def run_ha_test(duthost, localhost, tbinfo, ha_test_case, config_snappi_l47):
 
     test_type_dict = config_snappi_l47['test_type_dict']
     connection_dict = config_snappi_l47['connection_dict']
@@ -22,11 +23,21 @@ def run_ha_test(duthost, tbinfo, ha_test_case, config_snappi_l47):
     nw_config.set_mac_addresses(tbinfo['l47_tg_clientmac'], tbinfo['l47_tg_servermac'], tbinfo['dut_mac'])
 
     # Configure SmartSwitch
-    duthost_ha_config(duthost, nw_config, ha_test_case)
+    # duthost_port_config(duthost)
+
+    static_ipsmacs_dict = duthost_ha_config(duthost, nw_config, ha_test_case)
+
+    startup_result = npu_dpu_startup(duthost, localhost, static_ipsmacs_dict)
+    if startup_result is False:
+        return
+
+    set_static_routes(duthost, static_ipsmacs_dict)
 
     # Configure IxLoad traffic
     api, config, initial_cps_value = ha_main(ports_list, connection_dict, nw_config, test_type_dict['cps'],
                                              test_type_dict['test_filename'], test_type_dict['initial_cps_obj'])
+
+    # saveAs(api, config)
 
     # Traffic Starts
     if ha_test_case == 'cps':
@@ -36,9 +47,93 @@ def run_ha_test(duthost, tbinfo, ha_test_case, config_snappi_l47):
     return
 
 
-def dpu_config(duthost, ha_test_case):
+def wait_for_all_dpus_status(duthost, desired_status, timeout=300, interval=5):
 
-    pass
+    desired = desired_status.strip().lower()
+    if desired not in ("online", "offline"):
+        raise ValueError("desired_status must be 'online' or 'offline'")
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        result = duthost.shell("show chassis module status", module_ignore_errors=True)
+        stdout = result.get("stdout", "") or ""
+
+        # Keep only DPU rows
+        dpu_lines = [ln for ln in stdout.splitlines() if ln.strip().startswith("DPU")]
+        if dpu_lines:
+            statuses = []
+            for ln in dpu_lines:
+                parts = re.split(r"\s{2,}", ln.strip())
+                # Expected columns: [Name, Description, Physical-Slot, Oper-Status, Admin-Status, ...]
+                if len(parts) >= 4:
+                    statuses.append(parts[3].strip().lower())
+                else:
+                    statuses.append(None)
+
+            if statuses and all(st == desired for st in statuses):
+                return True
+
+        time.sleep(interval)
+
+    return False
+
+
+def wait_for_all_dpus_offline(duthost, timeout=600, interval=5):
+
+    logger.info("Waiting for all DPUs to be Offline")
+    return wait_for_all_dpus_status(duthost, "offline", timeout=timeout, interval=interval)
+
+
+def wait_for_all_dpus_online(duthost, timeout=600, interval=5):
+
+    logger.info("Waiting for all DPUs to be Online")
+    return wait_for_all_dpus_status(duthost, "online", timeout=timeout, interval=interval)
+
+
+def npu_dpu_startup(duthost, localhost, static_ipmacs_dict):
+
+    retries = 3
+    wait_time = 300
+    timeout = 600
+
+    while True:
+        logger.info("Issuing a {} reboot on the dut {}".format(
+            "warm_reboot", duthost.hostname))
+
+        reboot(duthost, localhost, wait_for_ssh=False)
+        logger.info("Waiting for dut ssh to start".format())
+        localhost.wait_for(host=duthost.mgmt_ip, port=22, state="started", delay=10, timeout=300)
+
+        wait(wait_time, msg="Wait for system to be stable.")
+        logger.info("Moving next to DPU config")
+        dpus_online_result = wait_for_all_dpus_online(duthost, timeout)
+
+        if dpus_online_result is False:
+            retries -= 1
+            logger.info("DPU boot failed, not all DPUs are online")
+            logger.info(f"Will retry boot, number of retries left: {retries}")
+            if retries == 0:
+                return False
+        else:
+            logger.info("DPU boot successful")
+            break
+
+    logger.info("Pinging each DPU")
+    dpuIFKeys = [k for k in static_ipmacs_dict['static_ips'] if k.startswith("221.0")]
+    for x, ipKey in enumerate(dpuIFKeys):
+        logger.info(f"Pinging DPU{x}: {static_ipmacs_dict['static_ips'][ipKey]}")
+        output_ping = duthost.command(f"ping -c 3 {static_ipmacs_dict['static_ips'][ipKey]}", module_ignore_errors=True)
+        if output_ping.get("rc", 1) == 0 and "0% packet loss" in output_ping.get("stdout", ""):
+            logger.info("Ping success")
+            pass
+        else:
+            # failure path; inspect output_ping["stderr"] or ["stdout"] as needed
+            logger.info("Ping failure")
+            pass
+
+    logger.info("DPU config loading DPUs")
+
+    return True
 
 
 def ha_switchTraffic(duthost, ha_test_case):
@@ -69,6 +164,34 @@ def ha_switchTraffic(duthost, ha_test_case):
     return
 
 
+def duthost_port_config(duthost):
+
+    logger.info("Backing up config_db.json")
+    # sudo sonic-cfggen -j test_config.json --write-to-db
+    duthost.command("sudo cp {} {}".format(
+        "/etc/sonic/config_db.json", "/etc/sonic/config_db_backup.json"))
+
+    logger.info("Saving config_db.json")
+    duthost.command("sudo config save -y")
+
+    logger.info("Reloading config_db.json")
+    duthost.shell("sudo config reload -y \n")
+
+    return
+
+
+def set_static_routes(duthost, static_ipmacs_dict):
+
+    static_macs = static_ipmacs_dict['static_macs']
+
+    # Install Static Routes
+    logger.info('Configuring static routes')
+    for ip in static_macs:
+        duthost.shell(f'sudo arp -s {ip} {static_macs[ip]}')
+
+    return
+
+
 def duthost_ha_config(duthost, nw_config, ha_test_case):
 
     # Smartswitch configure
@@ -83,34 +206,36 @@ def duthost_ha_config(duthost, nw_config, ha_test_case):
                              duthost.critical_services_fully_started),
                   "Not all critical services are fully started")
     """
+    static_ipsmacs_dict = {}
+
     config_db_stdout = duthost.shell("cat /etc/sonic/config_db.json")["stdout"]
     config_db = json.loads(config_db_stdout)
 
-    static_ips = []
-    for key in config_db['STATIC_ROUTE'].keys():
-        if key.endswith('/16'):
-            ip = config_db['STATIC_ROUTE'][key]['nexthop']
-            static_ips.append(ip)
+    static_ips = {}
+    for static_ip in config_db['STATIC_ROUTE']:
+        static_ips[f"{static_ip.split('|', 1)[1].split('/', 1)[0]}"] = config_db['STATIC_ROUTE'][static_ip]['nexthop']
 
     tmp_mac = ""
-    static_macs = []
-    for x, arp_mac in enumerate(range(len(static_ips))):
+    static_macs = {}
+    staticKeys = [k for k in static_ips if k.startswith("221.1")]
+    staticArpMacKeys = sorted(staticKeys, key=lambda k: int(k.rsplit('.', 1)[1]))
+
+    for x, key in enumerate((staticArpMacKeys)):
         if x == 0:
             tmp_mac = nw_config.first_staticArpMac
-            static_macs.append(nw_config.first_staticArpMac)
+            static_macs[static_ips[key]] = nw_config.first_staticArpMac
         else:
             tmp = tmp_mac.split(':')
             tmp[5] = "0{}".format(int(tmp[5]) + 1)
             static_arp_mac = ":".join(tmp)
-            static_macs.append(static_arp_mac)
+
+            static_macs[static_ips[key]] = static_arp_mac
             tmp_mac = static_arp_mac
 
-    # Install Static Routes
-    logger.info('Configuring static routes')
-    for x, arp in enumerate(range(len(static_ips))):
-        duthost.shell('sudo arp -s {} {}'.format(static_ips[x], static_macs[x]))
+    static_ipsmacs_dict['static_ips'] = static_ips
+    static_ipsmacs_dict['static_macs'] = static_macs
 
-    return
+    return static_ipsmacs_dict
 
 
 def assignPorts(api, ports_list):
@@ -190,7 +315,9 @@ def create_ip_list(nw_config):
 
     ip_list = []
 
-    ENI_COUNT = 1  # Change when scale up
+    # ENI_COUNT = 1  # Change when scale up
+    ENI_COUNT = nw_config.ENI_COUNT  # Change when scale up
+    logger.info("ENI_COUNT = {}".format(ENI_COUNT))
 
     for eni in range(nw_config.ENI_START, ENI_COUNT + 1):
         ip_dict_temp = {}
@@ -279,7 +406,7 @@ def set_rangeList(api):
     dict2 = {
         'firstCount': '10',
         'firstIncrementBy': '0.2.0.0',
-        'secondCount': '25000',
+        'secondCount': '64',
         'secondIncrementBy': '0.0.0.2'
     }
     vlan_dict = {'uniqueCount': 1}
@@ -362,7 +489,7 @@ def set_timelineCustom(api, initial_cps_value):
         'userObjectiveType': 'simulatedUsers',
         'userObjectiveValue': ENI_COUNT*250000
     }
-    """
+
     activityList_json = {  # noqa: F841
         'constraintType': 'ConnectionRateConstraint',
         'constraintValue': initial_cps_value,
@@ -370,11 +497,26 @@ def set_timelineCustom(api, initial_cps_value):
         'userObjectiveType': 'simulatedUsers',
         'userObjectiveValue': 64500
     }
+    """
 
+    activityList_json = {  # noqa: F841
+        'constraintType': 'ConnectionRateConstraint',
+        'constraintValue': initial_cps_value,
+        'enableConstraint': False,
+    }
+
+    timeline_json = {
+        'rampUpValue': 1000,
+        'sustainTime': 300
+    }
+
+    """
     timeline_json = {
         'rampUpValue': 1000000,
         'sustainTime': 180
     }
+    """
+
     # response = requests.patch(url_activityList, json=activityList_json)
     """
     try:
@@ -441,6 +583,7 @@ def run_cps_search(api, initial_cps_value):
         stats_client = []
         req.choice = "httpclient"
         req.httpclient.stat_name = ["Connection Rate"]
+        req.httpclient.end_test = True
         # req.httpclient.stat_name = ["HTTP Simulated Users", "HTTP Concurrent Connections", "HTTP Connect Time (us)",
         # "TCP Connections Established", "HTTP Bytes Received"]
         # req.httpclient.all_stats = True # for all stats
@@ -516,26 +659,43 @@ def run_cps_search(api, initial_cps_value):
     return api
 
 
-"""
-def test_saveAs(api, test_filename):
+def saveAs(api, test_filename):
 
     saveAs_operation = 'ixload/test/operations/saveAs'
-    #url = "{}/{}".format(base_url, saveAs_operation)
+    # url = "{}/{}".format(base_url, saveAs_operation)
     paramDict = {
         'fullPath': "C:\\automation\\{}.rxf".format(test_filename),
         'overWrite': True
     }
 
-    #response = requests.post(url, data=json.dumps(paramDict), headers=headers)
+    # response = requests.post(url, data=json.dumps(paramDict), headers=headers)
     try:
         # Code that may raise an exception
-        res = api.ixload_configure("post", saveAs_operation, paramDict)
+        res = api.ixload_configure("post", saveAs_operation, paramDict)  # noqa: F841
     except Exception as e:
         # Handle any exception
         logger.info(f"An error occurred: {e}")
 
     return
-"""
+
+
+def set_userIPMappings(api):
+
+    url = "ixload/test/activeTest/communityList/0/activityList/0"
+
+    param_userIpMapping = {
+        'userIpMapping': '1:ALL-PER-CONNECTION',
+    }
+
+    try:
+        # Code that may raise an exception
+        res = api.ixload_configure("patch", url, param_userIpMapping)  # noqa: F841
+    except Exception as e:
+        # Handle any exception
+        logger.info(f"An error occurred: {e}")
+        return None
+
+    return
 
 
 def ha_main(ports_list, connection_dict, nw_config, test_type, test_filename, initial_cps_value):
@@ -564,7 +724,9 @@ def ha_main(ports_list, connection_dict, nw_config, test_type, test_filename, in
 
     logger.info("Building Network traffic")
     for eni, eni_info in enumerate(ip_list):
+        # Change when adding in tcpbg
         test_role = find_test_role(test_type, eni_info['vlan_server'])
+        test_role = 'cps'
 
         # client ######
         if test_role == 'cps' or test_role == 'all':
@@ -727,13 +889,13 @@ def ha_main(ports_list, connection_dict, nw_config, test_type, test_filename, in
     logger.info("HTTP server completed")
 
     # Traffic Profile
-    ENI_COUNT = 1  # Change when scale up
+    ENI_COUNT = nw_config.ENI_COUNT   # Change when scale up
     logger.info("Configuring Traffic Profile settings")
     (tp1,) = config.trafficprofile.trafficprofile()
     # traffic_profile = config.TrafficProfiles.TrafficProfile(name = "traffic_profile_1")
     tp1.app = [http_client.name, http_server.name]
     tp1.objective_type = ["connection_per_sec", "simulated_user"]
-    tp1.objective_value = [6000000, ENI_COUNT*250000]
+    tp1.objective_value = [4500000, ENI_COUNT*250000]
     (obj_type,) = tp1.objectives.objective()
     obj_type.connection_per_sec.enable_controlled_user_adjustment = True
     obj_type.connection_per_sec.sustain_time = 14
@@ -778,6 +940,11 @@ def ha_main(ports_list, connection_dict, nw_config, test_type, test_filename, in
     time_custom_finish = time.time()
     logger.info("Custom settings completed: {}".format(time_custom_finish - time_custom_time))
 
+    # Edit userIpMapping
+    logger.info("Configuring userIpMapping settings")
+    set_userIPMappings(api)
+    logger.info("userIpMapping completed")
+
     logger.info("Configuring custom port settings")
     time_assignPort_time = time.time()
     assignPorts(api, ports_list)
@@ -793,7 +960,7 @@ def ha_main(ports_list, connection_dict, nw_config, test_type, test_filename, in
     # Here adjust Double Increment and vlanRange unique number
     logger.info("Configuring rangeList settings for client and server")
     test_rangeList_time = time.time()
-    # set_rangeList(api)
+    set_rangeList(api)
     test_rangeList_finish_time = time.time()
     logger.info("rangeList settings completed {}".format(test_rangeList_finish_time-test_rangeList_time))
 
@@ -820,7 +987,7 @@ def ha_main(ports_list, connection_dict, nw_config, test_type, test_filename, in
     # save file
     logger.info("Saving Test File")
     test_save_time = time.time()  # noqa: F841
-    # test_saveAs(api, test_filename)
+    saveAs(api, test_filename)
     test_save_finish_time = time.time()  # noqa: F841
     # logger.info("Finished saving: {}".format(test_save_finish_time - test_save_time))
     main_finish_time = time.time()

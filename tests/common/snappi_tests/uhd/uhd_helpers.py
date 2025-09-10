@@ -19,6 +19,9 @@ class NetworkConfigSettings:
 
         self.PAL = self.ipp("221.1.0.1")
         self.PAR = self.ipp("221.2.0.1")
+        self.STATIC = self.ipp("221.0.0.1")
+        self.STATICL = self.ipp("221.1.0.0")
+        self.STATICR = self.ipp("221.2.0.0")
 
         self.ACL_TABLE_MAC_STEP = '00:00:00:02:00:00'
         self.ACL_POLICY_MAC_STEP = '00:00:00:00:00:32'
@@ -104,21 +107,44 @@ def cidr_calculator(ip, cidr):
     return str(network.network_address)
 
 
-def find_card_slot(first_cps_card, first_tcpbg_card, server_vlan):
+def find_lb_ip(config, cards_dict, server_vlan):
+
+    card_slot_step = config.ENI_COUNT // cards_dict['num_cps_cards']
+    index = int((server_vlan - 1) / card_slot_step)
+
+    return str(ipaddress.ip_address(int(config.STATIC) + index))
+
+
+def find_dpu_port(config, cards_dict, vlan):
+
+    num_dpu_cards = 4
+    ENI_COUNT = 256
+    first_cps_card = 1
+
+    dpu_slot_step = ENI_COUNT // num_dpu_cards
+    dpu_slot = int((vlan - 1) / dpu_slot_step) + first_cps_card
+
+    return dpu_slot
+
+
+def find_card_slot(config, cards_dict, first_cps_card, first_tcpbg_card, server_vlan):
+
+    card_slot_step = config.ENI_COUNT // (len(cards_dict['l47_ports']) // 2)
 
     if first_tcpbg_card != 0:
         test_role = ""
         if (server_vlan - 1) % 4 == 3:
             # TCP BG
             test_role = "tcpbg"
-            card_slot = int((server_vlan - 1) / 64) + first_tcpbg_card
+            card_slot = int((server_vlan - 1) / (card_slot_step * 2)) + first_tcpbg_card
         else:
             # CPS
             test_role = "cps"
-            card_slot = int((server_vlan - 1) / 32) + first_cps_card
+            card_slot = int((server_vlan - 1) / card_slot_step) + first_cps_card
     else:
         test_role = "cps"
-        card_slot = int((server_vlan - 1) / 8) + first_cps_card  # 8 CS cards for cps
+        card_slot_step = config.ENI_COUNT // cards_dict['num_cps_cards']
+        card_slot = int((server_vlan - 1) / card_slot_step) + first_cps_card  # 8 CS cards for cps
 
     return card_slot, test_role
 
@@ -154,10 +180,11 @@ def find_testrole(test_role, server_vlan):
     return client_role, server_role
 
 
-def create_uhdIp_list(cidr, config):
+def create_uhdIp_list(cidr, config, cards_dict):
 
     ip_list = []
 
+    incr = 0
     for eni in range(config.ENI_START, config.ENI_COUNT + 1):
         ip_dict_temp = {}
         ip_client = build_node_ips(0, eni, config, nodetype="client")
@@ -169,10 +196,17 @@ def create_uhdIp_list(cidr, config):
         ip_dict_temp['eni'] = eni
         ip_dict_temp['ip_client'] = ip_client
         ip_dict_temp['vlan_client'] = vlan_client
+        ip_dict_temp['underlay_ip_l'] = str(ipaddress.ip_address(int(config.STATICL) + incr))
         ip_dict_temp['network_broadcast'] = network_broadcast
         ip_dict_temp['ip_server'] = ip_server
         ip_dict_temp['vlan_server'] = vlan_server
+        ip_dict_temp['underlay_ip_r'] = str(ipaddress.ip_address(int(config.STATICR) + incr))
+        ip_dict_temp['lb_ip'] = find_lb_ip(config, cards_dict, vlan_server)
+        ip_dict_temp['_ip'] = find_lb_ip(config, cards_dict, vlan_server)
 
+        ip_dict_temp['dpu_port'] = find_dpu_port(config, cards_dict, vlan_server)
+
+        incr += 1
         ip_list.append(ip_dict_temp)
 
     return ip_list
@@ -197,46 +231,73 @@ def create_front_panel_ports(count, config, cards_dict):
 
     # l47 Front Panel
     fp_list = []
-    front_panel_port = 9
-    channel = 1
     num_channels = config.uhd_num_channels
 
-    # TODO num_channels will need an update
+    l47_ports_length = len(cards_dict['l47_ports'])
+    data_index = 0
     for i in range(1, count // 2 + 1):
         for nodetype in ['s', 'c']:
-            new_dict = {
-                "name": f"l47_port_{i}{nodetype}",
-                "choice": "front_panel_port",
-                "front_panel_port": {
-                    "front_panel_port": front_panel_port,
-                    "channel": channel,
-                    "num_channels": num_channels,
-                    "layer_1_profile_name": "{}".format(config.layer1_profile_names[1])
-                }
-            }
-            fp_list.append(new_dict)
-            channel += 2
-            if channel > 7:
-                channel = 1
-                front_panel_port += 1
+            if data_index < l47_ports_length:  # Check against actual list length
+                if not cards_dict['l47_ports'][data_index]['Channel']:
+                    new_dict = {
+                        "name": f"l47_port_{i}{nodetype}",
+                        "choice": "front_panel_port",
+                        "front_panel_port": {
+                            "front_panel_port": int(cards_dict['l47_ports'][data_index]['FrontPanel']),
+                            "layer_1_profile_name": "{}".format(config.layer1_profile_names[1])
+                        }
+                    }
+                else:
+                    new_dict = {
+                        "name": f"l47_port_{i}{nodetype}",
+                        "choice": "front_panel_port",
+                        "front_panel_port": {
+                            "front_panel_port": int(cards_dict['l47_ports'][data_index]['FrontPanel']),
+                            "channel": int(cards_dict['l47_ports'][data_index]['Channel']),
+                            "num_channels": num_channels,
+                            "layer_1_profile_name": "{}".format(config.layer1_profile_names[1])
+                        }
+                    }
+                fp_list.append(new_dict)
+            data_index += 1
 
     # l47 Front Panel DPU
     # TODO add num_dpuPorts then build this part
-    dpu_port_1 = {"name": "l47_port_1", "choice": "port_group",
-        "port_group":  # noqa: E128
-        {  # noqa: E128
-            "ports": [
-            {  # noqa: E122
-            "front_panel_port": cards_dict['dpu_ports_list'][0], "layer_1_profile_name": "{}".format(  # noqa: E122
-                config.layer1_profile_names[3]),  # noqa: E122
-            "switchover_port": {"front_panel_port": cards_dict['dpu_ports_list'][1],  # noqa: E122
-                                "layer_1_profile_name": "{}".format(config.layer1_profile_names[3])}  # noqa: E122
-            }
-            ]
-        }
-    }
 
-    fp_list.append(dpu_port_1)
+    dpu_ports_length = len(cards_dict['dpu_ports'])
+    dpu_port = 0
+    switchover_port = 0
+    for i in range(1, dpu_ports_length + 1):
+        if cards_dict['dpu_ports'][i - 1]['SwitchOverPort'] == 'True':
+            switchover_port = int(cards_dict['dpu_ports'][i - 1]['FrontPanel'])
+        else:
+            dpu_port = int(cards_dict['dpu_ports'][i - 1]['FrontPanel'])
+
+    if switchover_port == 0:
+        for x, dpu in enumerate(cards_dict['dpu_ports']):
+            dpu_port_ = {"name": f"l47_dpuPort_{x + 1}", "choice": "port_group", "front_panel_port": {
+                "front_panel_port": int(cards_dict['dpu_ports'][x]['FrontPanel']),
+                "layer_1_profile_name": "{}".format(config.layer1_profile_names[3])
+            }
+            }
+            fp_list.append(dpu_port_)
+    else:
+        dpu_port_1 = {"name": "l47_dpuPort_1", "choice": "port_group",
+                      "port_group":  # noqa: E128
+                          {  # noqa: E127
+                              "ports": [
+                                  {  # noqa: E122
+                                      "front_panel_port": dpu_port, "layer_1_profile_name": "{}".format(  # noqa: E122
+                                      config.layer1_profile_names[3]),  # noqa: E122
+                                      "switchover_port": {"front_panel_port": switchover_port,  # noqa: E122
+                                                          "layer_1_profile_name": "{}".format(
+                                                              config.layer1_profile_names[3])}
+                                  }
+                              ]
+                          }
+                      }
+
+        fp_list.append(dpu_port_1)
 
     return fp_list
 
@@ -267,7 +328,7 @@ def create_arp_bypass(fp_ports_list, ip_list, config, cards_dict, subnet_mask):
         client_vlan = build_node_vlan(eni, config, nodetype="client")
         server_vlan = build_node_vlan(eni, config, nodetype="server")
 
-        client_card, test_role = find_card_slot(first_cps_card, first_tcpbg_card, server_vlan)
+        client_card, test_role = find_card_slot(config, cards_dict, first_cps_card, first_tcpbg_card, server_vlan)
         client_port = find_port(num_cps_cards, first_cps_card, first_tcpbg_card, server_vlan, test_role)  # noqa: F841
         # server_card, test_role = find_card_slot(first_cps_card, first_tcpbg_card, server_vlan)
 
@@ -317,16 +378,16 @@ def create_connections(fp_ports_list, ip_list, subnet_mask, config, cards_dict, 
             'endpoints': []
         }
 
-        client_vlan = build_node_vlan(eni, config, nodetype="client")
-        server_vlan = build_node_vlan(eni, config, nodetype="server")
+        client_vlan = ip_list[eni]['vlan_client']
+        server_vlan = ip_list[eni]['vlan_server']
 
-        client_card, test_role = find_card_slot(first_cps_card, first_tcpbg_card, server_vlan)
+        client_card, test_role = find_card_slot(config, cards_dict, first_cps_card, first_tcpbg_card, server_vlan)
         # client_cps_port = find_port(num_cps_cards, first_cps_card, first_tcpbg_card, server_vlan, test_role)
-        server_card, test_role = find_card_slot(first_cps_card, first_tcpbg_card, server_vlan)
+        server_card, test_role = find_card_slot(config, cards_dict, first_cps_card, first_tcpbg_card, server_vlan)
 
         # TODO needed when there are multiple DPU Ports
         # dpu_port = 1 if server_vlan <= 128 else 2
-        dpu_port = 1
+        # dpu_port = 1
 
         # Server side
         """
@@ -335,12 +396,14 @@ def create_connections(fp_ports_list, ip_list, subnet_mask, config, cards_dict, 
         else:
             overlay_ip_addr = eni+1
         """
-        overlay_ip_addr = eni
+        # overlay_ip_addr = eni
 
+        """
         if server_vlan <= 128:
             lb_ip = 1
         else:
             lb_ip = 2
+        """
 
         client_role, server_role = find_testrole(test_role, server_vlan)
 
@@ -356,8 +419,8 @@ def create_connections(fp_ports_list, ip_list, subnet_mask, config, cards_dict, 
                 "outgoing_vxlan_header": {
                     "src_mac": {"choice": "mac", "mac": "{}".format(config.l47_tg_servermac)},
                     "dst_mac": {"choice": "mac", "mac": "{}".format(config.dut_mac)},
-                    "src_ip": {"choice": "ipv4", "ipv4": "221.1.0.{}".format(overlay_ip_addr)},
-                    "dst_ip": {"choice": "ipv4", "ipv4": "221.0.0.{}".format(lb_ip)},
+                    "src_ip": {"choice": "ipv4", "ipv4": "{}".format(ip_list[eni]['underlay_ip_l'])},
+                    "dst_ip": {"choice": "ipv4", "ipv4": "{}".format(ip_list[eni]['lb_ip'])},
                 }
             },
             "vxlan_endpoint_settings": {"vni": {"choice": "vni", "vni": server_vlan + vni_index},
@@ -372,7 +435,7 @@ def create_connections(fp_ports_list, ip_list, subnet_mask, config, cards_dict, 
             "vlan": {"choice": "vlan", "vlan": server_vlan}}, "tags": ["vlan"]},  # noqa: E122
         )
         server_dict_temp['endpoints'].append(
-            {"choice": "front_panel", "front_panel": {"port_name": "l47_port_{}".format(dpu_port)},
+            {"choice": "front_panel", "front_panel": {"port_name": "l47_dpuPort_{}".format(ip_list[eni]['dpu_port'])},
              "tags": ["vxlan"]}
         )
 
@@ -383,8 +446,8 @@ def create_connections(fp_ports_list, ip_list, subnet_mask, config, cards_dict, 
                 "outgoing_vxlan_header": {
                     "src_mac": {"choice": "mac", "mac": "{}".format(config.l47_tg_clientmac)},
                     "dst_mac": {"choice": "mac", "mac": "{}".format(config.dut_mac)},
-                    "src_ip": {"choice": "ipv4", "ipv4": "221.2.0.{}".format(overlay_ip_addr)},
-                    "dst_ip": {"choice": "ipv4", "ipv4": "221.0.0.{}".format(lb_ip)},
+                    "src_ip": {"choice": "ipv4", "ipv4": "{}".format(ip_list[eni]['underlay_ip_r'])},
+                    "dst_ip": {"choice": "ipv4", "ipv4": "{}".format(ip_list[eni]['lb_ip'])},
                 }
             },
             "vxlan_endpoint_settings": {"vni": {"choice": "vni", "vni": client_vlan}, "protocols": {"accept": ["tcp"]},
@@ -404,7 +467,7 @@ def create_connections(fp_ports_list, ip_list, subnet_mask, config, cards_dict, 
         )
 
         client_dict_temp['endpoints'].append(
-            {"choice": "front_panel", "front_panel": {"port_name": "l47_port_{}".format(dpu_port)},
+            {"choice": "front_panel", "front_panel": {"port_name": "l47_dpuPort_{}".format(ip_list[eni]['dpu_port'])},
              "tags": ["vxlan"]}
         )
 

@@ -14,4 +14,4 @@ snappi_sonic          ansible_host=10.1.1.4    os=snappi
 uhd_connect           ansible_host=10.1.1.5   os=snappi
 
 [ptf]
-snappi_sonic_ixl ansible_host=10.1.1.3
+snappi_sonic_l47 ansible_host=10.1.1.3
