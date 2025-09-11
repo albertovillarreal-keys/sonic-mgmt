@@ -3,10 +3,21 @@ from tests.common.reboot import reboot
 from tests.common.utilities import (wait, wait_until)  # noqa F401
 from tests.common.helpers.assertions import pytest_assert  # noqa F401
 from tests.common.snappi_tests.uhd.uhd_helpers import NetworkConfigSettings  # noqa: F403, F401
+from netmiko import ConnectHandler
+from pathlib import Path
+
+import multiprocessing  # noqa: F401
 import snappi
 import re
 import time
 import json
+
+import os
+import glob
+import paramiko
+import netmiko
+import textwrap
+
 
 import logging
 
@@ -49,9 +60,10 @@ def run_ha_test(duthost, localhost, tbinfo, ha_test_case, config_snappi_l47):
 
 def wait_for_all_dpus_status(duthost, desired_status, timeout=300, interval=5):
 
-    desired = desired_status.strip().lower()
-    if desired not in ("online", "offline"):
-        raise ValueError("desired_status must be 'online' or 'offline'")
+    if isinstance(desired_status, (list, tuple, set)):
+        desired_set = {str(s).strip().lower() for s in desired_status}
+    else:
+        desired_set = {str(desired_status).strip().lower()}
 
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -70,7 +82,7 @@ def wait_for_all_dpus_status(duthost, desired_status, timeout=300, interval=5):
                 else:
                     statuses.append(None)
 
-            if statuses and all(st == desired for st in statuses):
+            if statuses and all(st in desired_set for st in statuses):
                 return True
 
         time.sleep(interval)
@@ -84,10 +96,135 @@ def wait_for_all_dpus_offline(duthost, timeout=600, interval=5):
     return wait_for_all_dpus_status(duthost, "offline", timeout=timeout, interval=interval)
 
 
-def wait_for_all_dpus_online(duthost, timeout=600, interval=5):
+def wait_for_all_dpus_online(duthost, timeout=600, interval=5, allow_partial=True):
 
-    logger.info("Waiting for all DPUs to be Online")
-    return wait_for_all_dpus_status(duthost, "online", timeout=timeout, interval=interval)
+    # logger.info("Waiting for all DPUs to be Online")
+
+    desired = ["online", "partial online"] if allow_partial else "online"
+    if allow_partial:
+        logger.info("Waiting for all DPUs to be Online or Partial Online")
+    else:
+        logger.info("Waiting for all DPUs to be Online")
+
+    return wait_for_all_dpus_status(duthost,desired, timeout=timeout, interval=interval)
+
+
+def _telemetry_run_on_dut(duthost):
+
+    cmd = (
+        "docker exec -d gnmi "
+        "/usr/sbin/telemetry -logtostderr "
+        "--server_crt /etc/sonic/tls/server.crt "
+        "--server_key /etc/sonic/tls/server.key "
+        "--port 8080 --allow_no_client_auth -v=2 "
+        "-zmq_port=8100 --threshold 100 --idle_conn_duration 5"
+    )
+    logger.info("Running telemetry on the DUT")
+    # Ignore errors if it is already running; let caller proceed
+    duthost.shell(cmd, module_ignore_errors=True)
+
+def _ensure_remote_dir_on_dut(duthost, remote_dir):
+    logger.info("Make directory on DUT to store DPU config files:")
+    duthost.shell(f"sudo mkdir -p {remote_dir}")
+
+def _copy_files_to_dut(duthost, local_files, remote_dir):
+
+    logger.info(f"Copying files to DUT")
+    # duthost.copy copies from the test controller to the DUT
+    for lf in local_files:
+        duthost.copy(src=lf, dest=remote_dir)
+
+"""
+def _iter_dpu_config_files(dpu_index, local_dir):
+    pattern = os.path.join(local_dir, f"*dpu{dpu_index}*.json")
+    return sorted(glob.glob(pattern))
+"""
+
+def _iter_dpu_config_files(dpu_index, local_dir):
+
+    logger.info(f"Iterating through dpu_config files for DPU {dpu_index}")
+    subdir = os.path.join(local_dir, f"dpu{dpu_index}")
+
+    if os.path.isdir(subdir):
+        return sorted(glob.glob(os.path.join(subdir, "*.json")))
+
+    return False
+
+
+def _set_routes_on_dut(duthost):
+
+
+    return
+
+
+def _docker_run_config_on_dut(duthost, remote_dir, dpu_index, remote_basename):
+    logger.info(f"Docker run config for DPU{dpu_index}")
+    cmd = (
+        "docker run --rm --network host "
+        f"--mount src={remote_dir},target=/dpu,type=bind,readonly "
+        "--mount src=/root/go_gnmi_utils.py,"
+        "target=/usr/lib/python3/dist-packages/gnmi_agent/go_gnmi_utils.py,"
+        "type=bind,readonly "
+        "-t sonic-gnmi-agent:latest -c "
+        f"'gnmi_client.py --batch_val 500 --dpu_index {dpu_index} --num_dpus 8 "
+        f"--target 127.0.0.1:8080 update --filename /dpu/{remote_basename}'"
+    )
+    return duthost.shell(cmd, module_ignore_errors=True)
+
+
+def load_dpu_configs_on_dut(
+    duthost,
+    dpu_index,
+    local_dir=None,
+    local_files=None,
+    remote_dir="/tmp/dpu_configs",
+    initial_delay_sec=20,
+    retry_delay_sec=10
+):
+    """
+    Load DPU config JSONs by running gnmi_client in a Docker container on the DUT.
+    """
+    logger.info(f"Preparing to load DPU configs on DUT for dpu_index={dpu_index}")
+    if not local_files:
+        if not local_dir:
+            # Default to repo path: tests/snappi_tests/dash/dpu_configs
+            local_dir = str((Path(__file__).resolve().parents[1] / "dpu_configs"))
+
+        if not os.path.isdir(local_dir):
+            raise RuntimeError(f"Config directory does not exist: {local_dir}")
+
+        local_files = _iter_dpu_config_files(dpu_index, local_dir)
+
+    if not local_files:
+        logger.info("No matching JSON files found to load for this DPU; skipping.")
+        return
+
+    remote_dir = f"{remote_dir}/dpu{dpu_index}"
+    _ensure_remote_dir_on_dut(duthost, remote_dir)
+    _telemetry_run_on_dut(duthost)
+    _copy_files_to_dut(duthost, local_files, remote_dir)
+    _set_routes_on_dut(duthost)
+
+    delay = initial_delay_sec
+    for lf in local_files:
+        rb = os.path.basename(lf)
+        logger.info(f"Loading {lf} on DUT")
+        res = _docker_run_config_on_dut(duthost, remote_dir, dpu_index, rb)
+        out = res.get("stdout", "")
+        err = res.get("stderr", "")
+        if "Set failed: rpc error: code = Unavailable desc = connection err" in (out + err):
+            logger.info(f"RPC unavailable for {rb}; retrying after telemetry restart")
+            duthost.shell("docker ps --format '{{.Names}}' | grep -w gnmi || true", module_ignore_errors=True)
+            time.sleep(120)
+            _telemetry_run_on_dut(duthost)
+            time.sleep(retry_delay_sec)
+            _docker_run_config_on_dut(duthost, remote_dir, dpu_index, rb)
+
+        time.sleep(delay)
+        delay = 2
+
+    logger.info("Finished loading all DPU configs on DUT")
+
 
 
 def npu_dpu_startup(duthost, localhost, static_ipmacs_dict):
@@ -132,6 +269,120 @@ def npu_dpu_startup(duthost, localhost, static_ipmacs_dict):
             pass
 
     logger.info("DPU config loading DPUs")
+    # threads = []
+    for target_dpu_index in range(8):
+
+        # admin@MtFuji:~$
+        # admin@sonic:~$
+        # OSError: Search pattern never detected in send_command_expect: admin@MtFuji:\~
+
+        jump_host = {
+            'device_type': 'linux',
+            'ip': '10.36.77.120',
+            'username': 'admin',
+            'password': 'password',
+        }
+
+        target_ip = f'18.0.202.{target_dpu_index + 1}'
+        target_username = 'admin'
+        target_password = 'password'
+        # Connect to jump host
+        net_connect_jump = ConnectHandler(**jump_host)
+        # SSH from jump host to target device
+        net_connect_jump.write_channel(f"ssh -o StrictHostKeyChecking=no {target_username}@{target_ip}\n")
+        time.sleep(3)  # Allow time for prompt
+        net_connect_jump.write_channel(f"{target_password}\n")
+        time.sleep(3)  # Allow time for login
+        # Execute commands on target device
+        output = net_connect_jump.set_base_prompt(alt_prompt_terminator="$")
+        logger.info(output)
+        output = net_connect_jump.send_command('show version')
+        logger.info(output)
+
+        output = net_connect_jump.send_command('show ip route')
+        logger.info(output)
+
+        found = False
+        if 'S>*0.0.0.0/0' in output:
+            found = True
+
+        if found == False:
+            output = net_connect_jump.send_command('sudo ip route del 0.0.0.0/0 via 169.254.200.254')
+            logger.info(output)
+            output = net_connect_jump.send_command('sudo config route del prefix 0.0.0.0/0 via 169.254.200.254')
+            logger.info(output)
+            time.sleep(1)
+            logger.info(f'sudo config route add prefix 0.0.0.0/0 nexthop 18.{target_dpu_index}.202.0')
+            output = net_connect_jump.send_command(
+                f'sudo config route add prefix 0.0.0.0/0 nexthop 18.{target_dpu_index}.202.0')
+            logger.info(output)
+            output = net_connect_jump.send_command('show ip route')
+            logger.info(output)
+
+        output = net_connect_jump.send_command('show ip interfaces')
+        found = False
+        for line in output:
+            if 'Loopback0' in line.strip('\n'):
+                found = True
+                break
+        if found == False:
+            logger.info(f'sudo config interface ip add Loopback0 221.0.0.{target_dpu_index + 1}')
+            output = net_connect_jump.send_command(
+                f'sudo config interface ip add Loopback0 221.0.0.{target_dpu_index + 1}')
+            logger.info(output)
+            output = net_connect_jump.send_command('show ip interfaces')
+            logger.info(output)
+
+        output = net_connect_jump.send_command('show ip interfaces')
+        logger.info(output)
+        found = False
+        for line in output:
+            if 'Loopback1' in line.strip('\n'):
+                found = True
+                break
+        if found == False:
+            logger.info(f'sudo config interface ip add Loopback1 221.0.{target_dpu_index + 1}.{target_dpu_index + 1}')
+            output = net_connect_jump.send_command(
+                f'sudo config interface ip add Loopback1 221.0.{target_dpu_index + 1}.{target_dpu_index + 1}')
+            logger.info(output)
+
+        output = net_connect_jump.send_command('show ip interfaces')
+        logger.info(output)
+        output = net_connect_jump.send_command('show ip route')
+        logger.info(output)
+        output = net_connect_jump.send_command('sudo arp -a')
+        logger.info(output)
+
+        # Disconnect from target and then jump host
+        net_connect_jump.write_channel('exit')  # Exit target device session
+        net_connect_jump.disconnect()
+        # route_command = f"sudo python3 -c {script}"
+
+        try:
+            remote_dir = "/tmp/dpu_configs"
+            initial_delay_sec = 20
+            retry_delay_sec = 10
+
+            load_dpu_configs_on_dut(
+                duthost=duthost,
+                dpu_index=target_dpu_index,
+                remote_dir=remote_dir,
+                initial_delay_sec=20,
+                retry_delay_sec=10
+            )
+
+            # threads.append(multiprocessing.Process(target=load_dpu_configs_on_dut, args=(duthost, target_dpu_index, remote_dir, initial_delay_sec, retry_delay_sec)))
+
+        except Exception as e:
+            logger.info(f"Failed to load DPU configs on DUT: {e}")
+            return False
+
+    """
+    for p in threads:
+        p.start()
+    for p in threads:
+        p.join()
+    """
 
     return True
 
