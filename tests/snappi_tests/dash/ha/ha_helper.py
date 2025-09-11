@@ -237,11 +237,11 @@ def npu_dpu_startup(duthost, localhost, static_ipmacs_dict):
         logger.info("Issuing a {} reboot on the dut {}".format(
             "warm_reboot", duthost.hostname))
 
-        reboot(duthost, localhost, wait_for_ssh=False)
+        # reboot(duthost, localhost, wait_for_ssh=False)
         logger.info("Waiting for dut ssh to start".format())
         localhost.wait_for(host=duthost.mgmt_ip, port=22, state="started", delay=10, timeout=300)
 
-        wait(wait_time, msg="Wait for system to be stable.")
+        # wait(wait_time, msg="Wait for system to be stable.")
         logger.info("Moving next to DPU config")
         dpus_online_result = wait_for_all_dpus_online(duthost, timeout)
 
@@ -283,7 +283,7 @@ def npu_dpu_startup(duthost, localhost, static_ipmacs_dict):
             'password': 'password',
         }
 
-        target_ip = f'18.0.202.{target_dpu_index + 1}'
+        target_ip = f'18.{target_dpu_index}.202.1'
         target_username = 'admin'
         target_password = 'password'
         # Connect to jump host
@@ -358,6 +358,7 @@ def npu_dpu_startup(duthost, localhost, static_ipmacs_dict):
         net_connect_jump.disconnect()
         # route_command = f"sudo python3 -c {script}"
 
+    for target_dpu_index in range(8):
         try:
             remote_dir = "/tmp/dpu_configs"
             initial_delay_sec = 20
