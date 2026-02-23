@@ -29,6 +29,7 @@ from tests.common.snappi_tests.uhd.uhd_helpers import (NetworkConfigSettings, cr
                                                        create_connections, create_connections_pl, create_uhdIp_list,
                                                        create_arp_bypass, create_arp_bypass_pl, create_profiles)
 logger = logging.getLogger(__name__)
+_next_system_id = 1
 
 macsec_enabled_port = {}
 macsec_profile_name = ""
@@ -321,6 +322,7 @@ def __portchannel_intf_config(config, port_config_list, duthost, snappi_ports):
     """
     Generate Snappi configuration of PortChannel (LAG) member and LAG interfaces (IPv4 + IPv6).
     """
+    global _next_system_id
     mg_facts = duthost.minigraph_facts(host=duthost.hostname)['ansible_facts']
     if 'minigraph_portchannels' not in mg_facts:
         return True
@@ -349,11 +351,14 @@ def __portchannel_intf_config(config, port_config_list, duthost, snappi_ports):
             for m in members
             if ((sp['peer_port'] == m) and (sp['peer_device'] == duthost.hostname))]
 
+        member_port_ids = [int(sp['port_id']) for sp in (snappi_ports) for m in members if
+                           ((sp['peer_port'] == m) and (sp['peer_device'] == duthost.hostname))]
+
         if not member_port_ids:
             continue
-
+        last_byte = _next_system_id & 0xFF
         lag = config.lags.lag(name='Lag {}'.format(pc))[-1]
-        lag.protocol.lacp.actor_system_id = '00:00:00:00:00:01'
+        lag.protocol.lacp.actor_system_id = f"00:00:00:00:00:{last_byte:02x}"
         lag.protocol.lacp.actor_system_priority = 1
         lag.protocol.lacp.actor_key = 1
 
@@ -422,6 +427,7 @@ def __portchannel_intf_config(config, port_config_list, duthost, snappi_ports):
             ip6_stack.gateway = v6_entry['addr']
 
         pc_id += 1
+        _next_system_id += 1
 
     return True
 
