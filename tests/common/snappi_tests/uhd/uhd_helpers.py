@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 
 class NetworkConfigSettings:
-    def __init__(self):
+    def __init__(self, vxlan_endpoint_vni=1000):
         self.ipp = ipaddress.ip_address
         self.maca = macaddress.MAC
 
@@ -15,7 +15,7 @@ class NetworkConfigSettings:
         self.ENI_COUNT = 256
         self.ENI_MAC_STEP = '00:00:00:18:00:00'
         self.ENI_STEP = 1
-        self.ENI_L2R_STEP = 1000
+        self.ENI_L2R_STEP = vxlan_endpoint_vni
         self.ENI_PER_PORT = 64
 
         self.VTEP_IP = self.ipp("221.0.0.1")
@@ -343,48 +343,12 @@ def create_arp_bypass_pl(fp_ports_list, ip_list, config, cards_dict, subnet_mask
     ethpass_ports = cards_dict['ethpass_ports']
     num_cps_cards = cards_dict['num_cps_cards']
     first_cps_card, first_tcpbg_card = set_first_stateful_cards(cards_dict)
-    vrange_count = config.ENI_COUNT//num_cps_cards
-    vlan_start = (config.ENI_L2R_STEP + 1) - vrange_count
 
-    """
-    if cards_dict['num_cps_cards'] > 0:
-        first_cps_card = 1
-        if cards_dict['num_tcpbg_cards'] > 0:
-            first_tcpbg_card = cards_dict['num_cps_cards'] + 1
-        else:
-            first_tcpbg_card = 0
-    """
+    vrange_count = config.ENI_COUNT//num_cps_cards
+    vlan_start = (config.ENI_L2R_STEP + 1) - vrange_count  # noqa: F841
+
     # eth_bypass set here
     connections_list.append(_get_eth_bypass_dict(config, ethpass_ports))
-
-    vlan_start_tmp = vlan_start
-    for port in range(num_cps_cards):
-
-        vlan_start_tmp += vrange_count
-        arp_bypass_dict = {
-            'name': "ARP Bypass {}".format(port+1),
-            'functions': [{"choice": "connect_arp", "connect_arp": {}}],
-            'endpoints': []
-        }
-
-        # Test role will all use client instead of one client and one server
-        server_role = 's'
-        arp_bypass_dict['endpoints'].append(
-            {'choice': 'front_panel', 'front_panel': {'port_name': 'l47_port_{}{}'.format(port+1, server_role),
-                                                      'vlan': {'choice': 'vlan_range', 'vlan_range':
-                                                          {'start': vlan_start_tmp, 'count': vrange_count,  # noqa: E128
-                                                           'step': 1}}}}
-        )
-
-        client_role = 'c'
-        arp_bypass_dict['endpoints'].append(
-            {'choice': 'front_panel', 'front_panel': {'port_name': 'l47_port_{}{}'.format(port+1, client_role),
-                                                      'vlan': {'choice': 'vlan_range', 'vlan_range':
-                                                          {'start': vlan_start_tmp,  # noqa: E128
-                                                           'count': vrange_count, 'step': 1}}}}
-        )
-
-        connections_list.append(arp_bypass_dict)
 
     return connections_list
 
@@ -516,24 +480,53 @@ def create_connections_pl(fp_ports_list, ip_list, subnet_mask, config, cards_dic
         vlanEP_ip_tmp = vlan_endpoint_ip + (nvgre_count * port)
         vxlan_vni_tmp = vxlan_vni_start + (nvgre_count * port)
 
-        client_conn_tmp = {"choice": "connect_vlan_vxlan", "connect_vlan_vxlan": {
-            "vlan_endpoint_settings": {
-                "outgoing_vxlan_header": {
-                    "src_mac": {"choice": "mac", "mac": "{}".format(config.l47_tg_clientmac)},
-                    "dst_mac": {"choice": "mac", "mac": "{}".format(config.dut_mac)},
-                    "src_ip": {"choice": "ipv4_range", "ipv4_range": {'start': "{}".format(vlanEP_ip_tmp),
-                                                                      'count': nvgre_count, 'step': '0.0.0.1'}},
-                    "dst_ip": {"choice": "ipv4", "ipv4": "{}".format(vtep_ip_tmp)},
-                }
+        client_conn_tmp = {
+            "choice": "connect_vlan_vxlan",
+            "connect_vlan_vxlan": {
+                "vlan_endpoint_settings": {
+                    "outgoing_vxlan_header": {
+                        "src_mac": {"choice": "mac", "mac": f"{config.l47_tg_clientmac}"},
+                        "dst_mac": {"choice": "mac", "mac": f"{config.dut_mac}"},
+                        "src_ip": {
+                            "choice": "ipv4_range",
+                            "ipv4_range": {
+                                "start": f"{vlanEP_ip_tmp}",
+                                "count": nvgre_count,
+                                "step": "0.0.0.1",
+                            },
+                        },
+                        "dst_ip": {"choice": "ipv4", "ipv4": f"{vtep_ip_tmp}"},
+                    }
+                },
+                "vxlan_endpoint_settings": {
+                    "vni": {
+                        "choice": "vni_range",
+                        "vni_range": {
+                            "start": vxlan_vni_tmp,
+                            "count": nvgre_count,
+                            "step": 1,
+                        },
+                    },
+                    "protocols": {"accept": ["tcp"]},
+                    "routing_method": "ip_routing",
+                    "ip_routing": {
+                        "destination_ips": {
+                            "choice": "ipv4_range",
+                            "ipv4_range": {
+                                "start": f"{ip_tmp}",
+                                "count": config.NVGRE_COUNT,
+                                "step": "0.64.0.0",
+                            },
+                        }
+                    },
+                },
             },
-            "vxlan_endpoint_settings": {"vni": {"choice": "vni_range", "vni_range": {'start': vxlan_vni_tmp,
-                                        'count': nvgre_count, 'step': 1}}, "protocols": {"accept": ["tcp"]},
-                                        "routing_method": "ip_routing", "ip_routing": {"destination_ips":
-                                        {"choice": "ipv4_range", "ipv4_range": {  # noqa: E128
-                                        "start": "{}".format(ip_tmp),  # noqa: E122
-                                        "count": config.NVGRE_COUNT, "step": "0.64.0.0"}}},  # noqa: E122
-                                        "udp_src_port": vxlan_port, "udp_dst_port": vxlan_src_port}
-        }}
+        }
+
+        if not (vxlan_port == 0 and vxlan_src_port == 0):
+            vxlan_settings = client_conn_tmp["connect_vlan_vxlan"]["vxlan_endpoint_settings"]
+            vxlan_settings["udp_src_port"] = vxlan_port
+            vxlan_settings["udp_dst_port"] = vxlan_src_port
 
         client_vlan_tmp = client_vlan_start + (nvgre_count * port)
         client_dict_temp['functions'].append(client_conn_tmp)
@@ -715,9 +708,14 @@ def create_connections(fp_ports_list, ip_list, subnet_mask, config, cards_dict, 
             "vxlan_endpoint_settings": {"vni": {"choice": "vni", "vni": server_vlan + vni_index},
                     "protocols": {"accept": ["tcp"]}, "routing_method": "ip_routing",  # noqa: E128
                     "ip_routing": {"destination_ips": {"choice": "ipv4",
-                    "ipv4": "{}".format(ip_list[eni]['ip_server'])}},  # noqa: E128
-                                        "udp_src_port": vxlan_port, "udp_dst_port": vxlan_src_port}  # noqa: E128
+                    "ipv4": "{}".format(ip_list[eni]['ip_server'])}}}  # noqa: E128
         }}
+
+        if not (vxlan_port == 0 and vxlan_src_port == 0):
+            server_vxlan_settings = server_conn_tmp["connect_vlan_vxlan"]["vxlan_endpoint_settings"]
+            server_vxlan_settings["udp_src_port"] = vxlan_port
+            server_vxlan_settings["udp_dst_port"] = vxlan_src_port
+
         server_dict_temp['functions'].append(server_conn_tmp)
         server_dict_temp['endpoints'].append(
             {"choice": "front_panel", "front_panel": {
@@ -746,8 +744,13 @@ def create_connections(fp_ports_list, ip_list, subnet_mask, config, cards_dict, 
                                         "ipv4_range": {  # noqa: E128
                                             "start": "{}".format(ip_list[eni]['network_broadcast']),
                                             "count": 1, "subnet_bits": subnet_mask
-                                        }}}, "udp_src_port": vxlan_port, "udp_dst_port": vxlan_src_port}
+                                        }}}}
         }}
+
+        if not (vxlan_port == 0 and vxlan_src_port == 0):
+            client_vxlan_settings = client_conn_tmp["connect_vlan_vxlan"]["vxlan_endpoint_settings"]
+            client_vxlan_settings["udp_src_port"] = vxlan_port
+            client_vxlan_settings["udp_dst_port"] = vxlan_src_port
 
         client_dict_temp['functions'].append(client_conn_tmp)
         client_dict_temp['endpoints'].append(

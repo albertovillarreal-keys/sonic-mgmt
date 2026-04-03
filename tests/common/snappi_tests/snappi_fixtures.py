@@ -1779,6 +1779,7 @@ def setup_config_uhd_connect(request, tbinfo, ha_test_case=None):
         num_udpbg_cards = tbinfo['num_udpbg_cards']
         vxlan_port = tbinfo.get('vxlan_port', 0)
         vxlan_src_port = tbinfo.get('vxlan_src_port', 0)
+        vxlan_endpoint_vni = tbinfo.get('vxlan_endpoint_vni', 1000)
         num_dpu_ports = len(dpu_ports)
 
         cards_dict = {
@@ -1792,7 +1793,8 @@ def setup_config_uhd_connect(request, tbinfo, ha_test_case=None):
             'switchover_port': has_switchover
         }
 
-        uhdSettings = NetworkConfigSettings()  # noqa: F405
+        # uhdSettings = NetworkConfigSettings(vxlan_endpoint_vni)  # noqa: F405
+        uhdSettings = NetworkConfigSettings(vxlan_endpoint_vni)  # noqa: F405
         uhdSettings.set_mac_addresses(tbinfo['l47_tg_clientmac'], tbinfo['l47_tg_servermac'], tbinfo['dut_mac'])
         total_cards = num_cps_cards + num_tcpbg_cards + num_udpbg_cards
         subnet_mask = uhdSettings.subnet_mask
