@@ -609,7 +609,6 @@ def duthost_port_config(duthost):
     duthost.shell("sudo cp /etc/sonic/0HA_BACKUP/config_db.json  /etc/sonic/config_db.json")
 
     # logger.info(f"{duthost.hostname} Reloading config_db.json")
-    # duthost.shell("sudo config reload -y \n")
 
     logger.info(f"{duthost.hostname} Saving config_db.json")
     duthost.shell("sudo config save -y")
@@ -1472,28 +1471,6 @@ def patch_communityList2(api, nw_config):
             return None
 
     return
-
-
-"""
-def test_saveAs(api, test_filename):
-
-    saveAs_operation = 'ixload/test/operations/saveAs'
-    #url = "{}/{}".format(base_url, saveAs_operation)
-    paramDict = {
-        'fullPath': "C:\\automation\\{}.rxf".format(test_filename),
-        'overWrite': True
-    }
-
-    #response = requests.post(url, data=json.dumps(paramDict), headers=headers)
-    try:
-        # Code that may raise an exception
-        res = api.ixload_configure("post", saveAs_operation, paramDict)
-    except Exception as e:
-        # Handle any exception
-        logger.info(f"An error occurred: {e}")
-
-    return
-"""
 
 
 def delete_staticarp_files(chassis_ip, chassis_user_login, chassis_user_passwd, ixos_version):
