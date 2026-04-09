@@ -83,8 +83,6 @@ def setup_config_snappi_l47(request, duthosts, tbinfo, ha_test_case=None):
         l47_version = tbinfo['l47_version']
         service_type = tbinfo['service_type']
         chassis_ip = tbinfo['chassis_ip']
-        chassis_user_login = tbinfo['chassis_user_login']
-        chassis_user_passwd = tbinfo['chassis_user_passwd']
         clean_l47trafficgen_staticarps = tbinfo['clean_l47trafficgen_staticarps']
         gw_ip = tbinfo['l47_gateway']
         eni_per_dpu = int(tbinfo.get('eni_per_dpu', 0))
@@ -106,8 +104,6 @@ def setup_config_snappi_l47(request, duthosts, tbinfo, ha_test_case=None):
 
         connection_dict = {
             'chassis_ip': chassis_ip,
-            'chassis_user_login': chassis_user_login,
-            'chassis_user_passwd': chassis_user_passwd,
             'gw_ip': gw_ip,
             'port': '8080',
             'ixos_version': ixos_version,
@@ -116,14 +112,15 @@ def setup_config_snappi_l47(request, duthosts, tbinfo, ha_test_case=None):
 
         logger.info("Cleaning old static ARP files from the l47traifficgen server")
         if clean_l47trafficgen_staticarps:
-            delete_staticarp_files(chassis_ip, chassis_user_login, chassis_user_passwd, ixos_version)
+            delete_staticarp_files(chassis_ip, tbinfo, ixos_version)
 
         nw_config = NetworkConfigSettings()
         if ha_test_case != "cps":
             nw_config.ENI_COUNT = 32  # Set to 32 ENIs for HA test cases to test 1 Active/Standby DPU
         if ha_test_case == "cps" and eni_per_dpu > 0:
             nw_config.ENI_COUNT = eni_per_dpu
-        api, config, initial_cps_value = l47_trafficgen_main(ports_list, connection_dict, nw_config, service_type,
+        api, config, initial_cps_value = l47_trafficgen_main(ports_list, tbinfo, connection_dict, nw_config,
+                                                             service_type,
                                                              test_type_dict['all'], test_filename,
                                                              test_type_dict['initial_cps_obj'])
 

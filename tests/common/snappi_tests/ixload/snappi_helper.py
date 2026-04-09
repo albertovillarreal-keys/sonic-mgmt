@@ -352,8 +352,8 @@ def _set_routes_on_dut(duthosts, duthost, tbinfo, local_files, local_dir, dpu_in
             target_ip = f'18.{dpu_index}.202.1'
     else:
         target_ip = f'18.{dpu_index}.202.1'
-    target_username = 'admin'
-    target_password = 'YourPaSsWoRd'
+    target_username = tbinfo.get('dpu_target_username', 'admin')
+    target_password = tbinfo.get('dpu_target_passwd', 'YourPaSsWoRd')
 
     # Connect to jump host
     net_connect_jump = ConnectHandler(**jump_host)
@@ -1312,9 +1312,6 @@ def set_timelineCustom(api, initial_cps_value):
     except Exception as e:
         # Handle any exception
         logger.info(f"An error occurred: {e}")
-    except Exception as e:
-        # Handle any exception
-        logger.info(f"An error occurred: {e}")
 
     return
 
@@ -1473,7 +1470,7 @@ def patch_communityList2(api, nw_config):
     return
 
 
-def delete_staticarp_files(chassis_ip, chassis_user_login, chassis_user_passwd, ixos_version):
+def delete_staticarp_files(chassis_ip, tbinfo, ixos_version):
     def delete_files(ssh_client, remote_path, logger=None):
         """
         Delete a remote file using SFTP. If it doesn't exist, do nothing.
@@ -1503,22 +1500,20 @@ def delete_staticarp_files(chassis_ip, chassis_user_login, chassis_user_passwd, 
             if sftp:
                 sftp.close()
 
-    # setting up ssh connection
-    ssh_client = paramiko.SSHClient()
-    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
     # Connect to remote host
     logger.info(f"Connecting to {chassis_ip}...")
-    ssh_client.connect(hostname=f'{chassis_ip}', username=f'{chassis_user_login}', password=f'{chassis_user_passwd}')
+    ssh_client = set_chassis_connect(chassis_ip, tbinfo)
 
     card = 1  # Update this to use card number as an index
     # client
-    delete_files(ssh_client,
-                 f'/home/ixia_apps/ixos/{ixos_version}/nfs/rw/ports/{card}/1/ixtcp.arp', logger)
+    client_path = os.path.join(f'/home/ixia_apps/ixos/{ixos_version}/nfs/rw/ports/{card}/1/ixtcp.arp')
+    delete_files(ssh_client, client_path, logger)
 
     # server
-    delete_files(ssh_client,
-                 f'/home/ixia_apps/ixos/{ixos_version}/nfs/rw/ports/{card}/2/ixtcp.arp', logger)
+    server_path = os.path.join(f'/home/ixia_apps/ixos/{ixos_version}/nfs/rw/ports/{card}/2/ixtcp.arp')
+    delete_files(ssh_client, server_path, logger)
+
+    close_chassis_connect(ssh_client)
 
     return
 
@@ -1561,7 +1556,26 @@ def set_test_preferences(api):
     return
 
 
-def set_trafficgen_staticarps(api, staticarp_ranges, chassis_ip, chassis_user_login, chassis_user_passwd,
+def set_chassis_connect(chassis_ip, tbinfo):
+
+    chassis_user_login = tbinfo.get('chassis_user_login')
+    chassis_user_passwd = tbinfo.get('chassis_user_passwd')
+    # setting up ssh connection
+    ssh_client = paramiko.SSHClient()
+    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    ssh_client.connect(hostname=f'{chassis_ip}', username=f'{chassis_user_login}',
+                       password=f'{chassis_user_passwd}')
+
+    return ssh_client
+
+
+def close_chassis_connect(ssh_client):
+    # Close the SSH connection
+    ssh_client.close()
+
+
+def set_trafficgen_staticarps(staticarp_ranges, chassis_ip, tbinfo,
                               ixos_version, nw_config):
     def build_arp_payload(ssh_client, staticarp_ranges, ENI_TOTAL, filename, is_server, remote_path):
         lines = []
@@ -1601,43 +1615,37 @@ def set_trafficgen_staticarps(api, staticarp_ranges, chassis_ip, chassis_user_lo
     ENI_TOTAL = nw_config.ENI_COUNT
     card = 1  # Make this an index
 
-    ssh_client = paramiko.SSHClient()
-    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
     # Connect to remote host
     logger.info(f"Connecting to {chassis_ip}...")
-    ssh_client.connect(hostname=f'{chassis_ip}', username=f'{chassis_user_login}', password=f'{chassis_user_passwd}')
+    ssh_client = set_chassis_connect(chassis_ip, tbinfo)
 
     # Create client files
+    client_path = os.path.join(f'/home/ixia_apps/ixos/{ixos_version}/nfs/rw/ports/{card}/1/ixtcp.arp')
     build_arp_payload(
-        ssh_client, staticarp_ranges, ENI_TOTAL, f"ixtcp_{card}.arp", False,
-        f'/home/ixia_apps/ixos/{ixos_version}/nfs/rw/ports/{card}/1/ixtcp.arp'
+        ssh_client, staticarp_ranges, ENI_TOTAL, f"ixtcp_{card}.arp", False, client_path
     )
 
     # Create server files
+    server_path = os.path.join(f'/home/ixia_apps/ixos/{ixos_version}/nfs/rw/ports/{card}/2/ixtcp.arp')
     build_arp_payload(
-        ssh_client, staticarp_ranges, ENI_TOTAL, f"ixtcp_{card}_1.arp", True,
-        f'/home/ixia_apps/ixos/{ixos_version}/nfs/rw/ports/{card}/2/ixtcp.arp'
+        ssh_client, staticarp_ranges, ENI_TOTAL, f"ixtcp_{card}_1.arp", True, server_path
     )
 
-    # Close the SSH connection
-    ssh_client.close()
+    close_chassis_connect(ssh_client)
 
     logger.info("ARP files created successfully!")
 
     return
 
 
-def l47_trafficgen_main(ports_list, connection_dict, nw_config, service_type,
+def l47_trafficgen_main(ports_list, tbinfo, connection_dict, nw_config, service_type,
                         test_type, test_filename, initial_cps_value):
 
     # Start Here ######
     main_start_time = time.time()
     gw_ip = connection_dict['gw_ip']
     port = connection_dict['port']
-    chassis_ip = connection_dict['chassis_ip']
-    chassis_user_login = connection_dict['chassis_user_login']
-    chassis_user_passwd = connection_dict['chassis_user_passwd']
+    chassis_ip = tbinfo.get('chassis_ip')
     ixl_version = connection_dict['version']
     ixos_version = connection_dict['ixos_version']
 
@@ -1651,8 +1659,7 @@ def l47_trafficgen_main(ports_list, connection_dict, nw_config, service_type,
     ip_list = create_ip_list(nw_config, service_type)
     if service_type == 'privatelink':
         staticarp_ranges = create_staticarp_ranges(nw_config, ip_list)
-        set_trafficgen_staticarps(api, staticarp_ranges, chassis_ip, chassis_user_login, chassis_user_passwd,
-                                  ixos_version, nw_config)
+        set_trafficgen_staticarps(staticarp_ranges, chassis_ip, tbinfo, ixos_version, nw_config)
 
     logger.info("Setting devices")
     time_device_time = time.time()

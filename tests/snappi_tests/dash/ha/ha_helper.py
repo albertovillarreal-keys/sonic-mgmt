@@ -515,6 +515,7 @@ def run_cps_search(api, config_snappi_l47, file_name, initial_cps_value, passing
     releaseConfig_url = "ixload/test/operations/abortAndReleaseConfigWaitFinish"
     testRuns = []
 
+    # Find MAX CPS, track errors
     while ((MAX_CPS - MIN_CPS) > threshold):
 
         collector = ContinuousMetricsCollector(collection_interval=1)
@@ -660,6 +661,10 @@ def run_cps_search(api, config_snappi_l47, file_name, initial_cps_value, passing
         logger.info("Changing app state to stop")
         cs.app.state = 'stop'  # cs.app.state.START
         api.set_control_state(cs)
+
+    logger.info("Test Iteration Complete:")
+    logger.info(table)
+    logger.info(f"Final max CPS from all test runs is {max_cps_testruns}")
 
     return api
 
