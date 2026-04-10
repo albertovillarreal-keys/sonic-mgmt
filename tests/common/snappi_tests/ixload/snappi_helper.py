@@ -1562,7 +1562,7 @@ def set_chassis_connect(chassis_ip, tbinfo):
     chassis_user_passwd = tbinfo.get('chassis_user_passwd')
     # setting up ssh connection
     ssh_client = paramiko.SSHClient()
-    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # lgtm[py/accepts-unknown-host-key]
 
     ssh_client.connect(hostname=f'{chassis_ip}', username=f'{chassis_user_login}',
                        password=f'{chassis_user_passwd}')
@@ -1601,7 +1601,7 @@ def set_trafficgen_staticarps(staticarp_ranges, chassis_ip, tbinfo,
                     f"Count={count}, VlanID={vlan_id}\n")
 
         with io.open(filename, 'w+') as f:
-            f.writelines(lines)
+            f.writelines(lines)  # lgtm[py/clear-text-storage-sensitive-data]
 
         with SCPClient(ssh_client.get_transport()) as scp_client:
             try:
