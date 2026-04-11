@@ -6,7 +6,6 @@ from netmiko import ConnectHandler
 from scp import SCPClient
 from pathlib import Path
 import paramiko
-import io
 import snappi
 import stat
 import time
@@ -1560,12 +1559,20 @@ def set_chassis_connect(chassis_ip, tbinfo):
 
     chassis_user_login = tbinfo.get('chassis_user_login')
     chassis_user_passwd = tbinfo.get('chassis_user_passwd')
-    # setting up ssh connection
-    ssh_client = paramiko.SSHClient()
-    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # lgtm[py/accepts-unknown-host-key]
 
-    ssh_client.connect(hostname=f'{chassis_ip}', username=f'{chassis_user_login}',
-                       password=f'{chassis_user_passwd}')
+    # setting up ssh connection
+    try:
+        logger.info("Setting up an SSH client to connect to chassis")
+        ssh_client = paramiko.SSHClient()
+        logger.info("Loading host keys for SSH client")
+        ssh_client.load_system_host_keys()
+        logger.info(f"Connecting to {chassis_ip}...")
+        ssh_client.connect(hostname=f'{chassis_ip}', username=f'{chassis_user_login}',
+                           password=f'{chassis_user_passwd}')
+    except Exception as e:
+        logger.error(f"Failed to connect to {chassis_ip}, make sure credentials are correct and network is "
+                     f"reachable and chassis is part of known_hosts: {e}")
+        return None
 
     return ssh_client
 
@@ -1600,8 +1607,9 @@ def set_trafficgen_staticarps(staticarp_ranges, chassis_ip, tbinfo,
                     f"RemoteIPv4={ip_addr}, RemoteIPv4Incr=0.0.0.2, "
                     f"Count={count}, VlanID={vlan_id}\n")
 
-        with io.open(filename, 'w+') as f:
-            f.writelines(lines)  # lgtm[py/clear-text-storage-sensitive-data]
+        fd = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w') as f:
+            f.writelines(lines)
 
         with SCPClient(ssh_client.get_transport()) as scp_client:
             try:
