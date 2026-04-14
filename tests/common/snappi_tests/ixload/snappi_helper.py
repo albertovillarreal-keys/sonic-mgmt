@@ -1366,9 +1366,6 @@ def patch_dut_config(api, nw_config):
         print(f"An error occurred: {e}")
         return None
 
-    # Here patch ranges
-    # TODO fix the multiplier
-
     count = 0
     NETWORK_RANGE_ID = 0
     VLAN_ID = 1

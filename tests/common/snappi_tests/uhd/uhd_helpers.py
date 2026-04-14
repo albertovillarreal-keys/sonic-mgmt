@@ -297,8 +297,6 @@ def create_front_panel_ports(count, config, cards_dict):
             data_index += 1
 
     # l47 Front Panel DPU
-    # TODO add num_dpuPorts then build this part
-
     dpu_ports_length = len(cards_dict['dpu_ports'])
     dpu_port = 0
     switchover_port = 0
@@ -367,7 +365,6 @@ def create_connections_pl(fp_ports_list, ip_list, subnet_mask, config, cards_dic
         first_tcpbg_card = cards_dict['num_cps_cards'] + 1
     """
 
-    # TODO loopback IP need updated for multiple DPUs for example: 'dst_ip': {'choice': 'ipv4', 'ipv4': '221.0.0.1'}
     # ip6 = int(config.NVGRE_IP)  # noqa: F841
     ip6_step = int(config.NVGRE_IP_STEP)
     nvgre_count = config.NVGRE_COUNT
@@ -409,9 +406,6 @@ def create_connections_pl(fp_ports_list, ip_list, subnet_mask, config, cards_dic
         # client_cps_port = find_port(num_cps_cards, first_cps_card, first_tcpbg_card, server_vlan, test_role)
         # server_card, test_role = find_card_slot(first_cps_card, first_tcpbg_card, server_vlan)
 
-        # TODO needed when there are multiple DPU Ports
-        # dpu_port = 1 if server_vlan <= 128 else 2
-
         # Server side
         """
         if server_vlan == 256:
@@ -428,7 +422,6 @@ def create_connections_pl(fp_ports_list, ip_list, subnet_mask, config, cards_dic
 
         # client_role, server_role = find_testrole(test_role, server_vlan)
 
-        # TODO VNIs need to be +1000 for production
         production = True  # turn ON for now
         if production is True:
             vni_index = 1000
@@ -474,7 +467,6 @@ def create_connections_pl(fp_ports_list, ip_list, subnet_mask, config, cards_dic
         )
 
         # Client Side
-        # TODO vni_index
         client_start = config.IP_L_START
         ip_tmp = client_start + (int(ipaddress.ip_address('8.0.0.0')) * port)
         vlanEP_ip_tmp = vlan_endpoint_ip + (nvgre_count * port)
@@ -645,7 +637,6 @@ def create_connections(fp_ports_list, ip_list, subnet_mask, config, cards_dict, 
         first_tcpbg_card = cards_dict['num_cps_cards'] + 1
     """
 
-    # TODO loopback IP need updated for multiple DPUs for example: 'dst_ip': {'choice': 'ipv4', 'ipv4': '221.0.0.1'}
     for eni, ip in enumerate(ip_list):
 
         server_dict_temp = {
@@ -667,7 +658,6 @@ def create_connections(fp_ports_list, ip_list, subnet_mask, config, cards_dict, 
         # client_cps_port = find_port(num_cps_cards, first_cps_card, first_tcpbg_card, server_vlan, test_role)
         server_card, test_role = find_card_slot(config, cards_dict, first_cps_card, first_tcpbg_card, server_vlan)
 
-        # TODO needed when there are multiple DPU Ports
         # dpu_port = 1 if server_vlan <= 128 else 2
         # dpu_port = 1
 
@@ -689,7 +679,6 @@ def create_connections(fp_ports_list, ip_list, subnet_mask, config, cards_dict, 
 
         client_role, server_role = find_testrole(test_role, server_vlan)
 
-        # TODO VNIs need to be +1000 for production
         production = True  # turn ON for now
         if production is True:
             vni_index = 1000
@@ -728,7 +717,6 @@ def create_connections(fp_ports_list, ip_list, subnet_mask, config, cards_dict, 
         )
 
         # Client Side
-        # TODO vni_index
         client_conn_tmp = {"choice": "connect_vlan_vxlan", "connect_vlan_vxlan": {
             "vlan_endpoint_settings": {
                 "outgoing_vxlan_header": {
