@@ -355,15 +355,8 @@ def create_connections_pl(fp_ports_list, ip_list, subnet_mask, config, cards_dic
                           vxlan_port, vxlan_src_port):
 
     connections_list = arp_bypass_list
-
     num_cps_cards = cards_dict['num_cps_cards']
-
     first_cps_card, first_tcpbg_card = set_first_stateful_cards(cards_dict)
-    """
-    if cards_dict['num_cps_cards'] > 0:
-        first_cps_card = 1
-        first_tcpbg_card = cards_dict['num_cps_cards'] + 1
-    """
 
     # ip6 = int(config.NVGRE_IP)  # noqa: F841
     ip6_step = int(config.NVGRE_IP_STEP)
