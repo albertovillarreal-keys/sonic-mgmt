@@ -624,11 +624,6 @@ def create_connections(fp_ports_list, ip_list, subnet_mask, config, cards_dict, 
     connections_list = arp_bypass_list
 
     first_cps_card, first_tcpbg_card = set_first_stateful_cards(cards_dict)
-    """
-    if cards_dict['num_cps_cards'] > 0:
-        first_cps_card = 1
-        first_tcpbg_card = cards_dict['num_cps_cards'] + 1
-    """
 
     for eni, ip in enumerate(ip_list):
 
