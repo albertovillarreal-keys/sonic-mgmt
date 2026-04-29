@@ -346,11 +346,11 @@ def _set_routes_on_dut(duthosts, duthost, tbinfo, local_files, local_dir, dpu_in
             if duthost == duthosts[1]:
                 target_ip = f'169.254.200.{dpu_index + 1}'
             else:
-                target_ip = f'18.{dpu_index}.202.1'
+                target_ip = f'20.0.200.{dpu_index+1}'
         else:
-            target_ip = f'18.{dpu_index}.202.1'
+            target_ip = f'20.0.200.{dpu_index+1}'
     else:
-        target_ip = f'18.{dpu_index}.202.1'
+        target_ip = f'20.0.200.{dpu_index+1}'
     target_username = tbinfo.get('dpu_target_username', 'admin')
     target_password = tbinfo.get('dpu_target_passwd', 'YourPaSsWoRd')
 
@@ -400,9 +400,9 @@ def _set_routes_on_dut(duthosts, duthost, tbinfo, local_files, local_dir, dpu_in
                     'sudo config route del prefix 0.0.0.0/0 via 169.254.200.254', delay_factor=2)
                 logger.info(f"{duthost.hostname} Execute on DPU Target: {output}")
                 time.sleep(1)
-                logger.info(f'sudo config route add prefix 0.0.0.0/0 nexthop 18.{dpu_index}.202.0')
+                logger.info(f'sudo config route add prefix 0.0.0.0/0 nexthop 20.0.200.{dpu_index+1}')
                 output = net_connect_jump.send_command_timing(
-                    f'sudo config route add prefix 0.0.0.0/0 nexthop 18.{dpu_index}.202.0', delay_factor=2)
+                    f'sudo config route add prefix 0.0.0.0/0 nexthop 20.0.200.{dpu_index+1}', delay_factor=2)
                 logger.info(f"{duthost.hostname} Execute on DPU Target: {output}")
                 output = net_connect_jump.send_command_timing('show ip route', delay_factor=2)
                 logger.info(f"{duthost.hostname} Execute on DPU Target: {output}")
@@ -448,10 +448,10 @@ def _set_routes_on_dut(duthosts, duthost, tbinfo, local_files, local_dir, dpu_in
                     logger.info(f'Restarting hamgrd on {duthost.hostname}: docker restart dash-hadpu0')
                     duthost.shell("docker restart dash-hadpu0")
                     logger.info(f'Removing interface from {duthost.hostname}: '
-                                f'sudo config interface ip rem Ethernet0 18.{dpu_index}.202.1/31')
+                                f'sudo config interface ip rem Ethernet0 20.0.200.{dpu_index+1}/31')
                     time.sleep(2)
                     output = net_connect_jump.send_command_timing(
-                        f'sudo config interface ip rem Ethernet0 18.{dpu_index}.202.1/31', delay_factor=2)
+                        f'sudo config interface ip rem Ethernet0 20.0.200.{dpu_index+1}/31', delay_factor=2)
                     logger.info(
                         f'Deleting route on {duthost.hostname}: sudo ip route del 0.0.0.0/0 via 169.254.200.254')
                     time.sleep(2)
@@ -459,10 +459,10 @@ def _set_routes_on_dut(duthosts, duthost, tbinfo, local_files, local_dir, dpu_in
                         'sudo ip route del 0.0.0.0/0 via 169.254.200.254', delay_factor=2)
                     logger.info(
                         f'Adding route on {duthost.hostname}: '
-                        f'sudo config route add prefix 0.0.0.0/0 nexthop 20.{dpu_index}.202.0')
+                        f'sudo config route add prefix 0.0.0.0/0 nexthop 20.0.201.{dpu_index+1}')
                     time.sleep(2)
                     output = net_connect_jump.send_command_timing(
-                        f'sudo config route add prefix 0.0.0.0/0 nexthop 20.{dpu_index}.202.0', delay_factor=2)
+                        f'sudo config route add prefix 0.0.0.0/0 nexthop 20.0.201.{dpu_index+1}', delay_factor=2)
                     active_ethpass_ip = tbinfo['active_ethpass_ip']
                     active_mac = tbinfo['active_mac']
                     logger.info(
@@ -473,9 +473,9 @@ def _set_routes_on_dut(duthosts, duthost, tbinfo, local_files, local_dir, dpu_in
                         f'ping -c 3 {active_ethpass_ip}')  # noqa:  E231
                     output_ping = duthost.command(f"ping -c 3 {active_ethpass_ip}", module_ignore_errors=True)
                     logger.info(f'Correcting route on {duthost.hostname}: '
-                                f'sudo config route del prefix 221.0.0.{dpu_index+1}/32 nexthop 20.{dpu_index}.202.1')
+                                f'sudo config route del prefix 221.0.0.{dpu_index+1}/32 nexthop 20.0.201.{dpu_index+1}')
                     output = duthost.command(f'sudo config route del prefix 221.0.0.{dpu_index+1}/32 '
-                                             f'nexthop 20.{dpu_index}.202.1', module_ignore_errors=True)
+                                             f'nexthop 20.0.201.{dpu_index+1}', module_ignore_errors=True)
                     logger.info(f'Adding correct route on {duthost.hostname}: '
                                 f'sudo config route add prefix 221.0.0.{dpu_index+1}/32 nexthop 220.0.4.1')
                     output = duthost.command(f'sudo config route add prefix 221.0.0.{dpu_index+1}/32 '
@@ -491,10 +491,10 @@ def _set_routes_on_dut(duthosts, duthost, tbinfo, local_files, local_dir, dpu_in
                     output = net_connect_jump.send_command_timing(
                         'sudo ip route del 0.0.0.0/0 via 169.254.200.254', delay_factor=2)
                     logger.info(f'Adding route on {duthost.hostname}: '
-                                f'sudo config route add prefix 0.0.0.0/0 nexthop 18.{dpu_index}.202.0')
+                                f'sudo config route add prefix 0.0.0.0/0 nexthop 20.0.200.{dpu_index+1}')
                     time.sleep(2)
                     output = net_connect_jump.send_command_timing(
-                        f'sudo config route add prefix 0.0.0.0/0 nexthop 18.{dpu_index}.202.0', delay_factor=2)
+                        f'sudo config route add prefix 0.0.0.0/0 nexthop 20.0.200.{dpu_index+1}', delay_factor=2)
 
                     standby_ethpass_ip = tbinfo['standby_ethpass_ip']
                     standby_mac = tbinfo['standby_mac']
@@ -575,7 +575,7 @@ def load_dpu_configs_on_dut(
                                                 ha_test_case)
     remote_dir = f"{remote_dir}/dpu{dpu_index}"
     _ensure_remote_dir_on_dut(duthost, remote_dir)
-    _telemetry_run_on_dut(duthost)
+    # _telemetry_run_on_dut(duthost)
     _copy_files_to_dut(duthost, local_files, remote_dir)
 
     delay = initial_delay_sec
@@ -590,7 +590,7 @@ def load_dpu_configs_on_dut(
                 logger.info(f"RPC unavailable for {rb}; retrying after telemetry restart")  # noqa: E702
                 duthost.shell("docker ps --format '{{.Names}}' | grep -w gnmi || true", module_ignore_errors=True)
                 time.sleep(120)
-                _telemetry_run_on_dut(duthost)
+                # _telemetry_run_on_dut(duthost)
                 time.sleep(retry_delay_sec)
                 _docker_run_config_on_dut(duthost, remote_dir, dpu_index, rb)
 
@@ -884,6 +884,7 @@ def npu_startup(duthosts, duthost, localhost):
             logger.info(f"DPU boot successful on {duthost.hostname}")
             break
 
+    '''
     if duthost == duthosts[1]:  # standby device
         logger.info(f"Removing unwanted IPs from standby device: {duthost.hostname}")
         remove_dpu_ip_addresses_from_npu(
@@ -891,6 +892,7 @@ def npu_startup(duthosts, duthost, localhost):
             ip_prefixes_to_remove=["18"],  # Removes 18.X.202.0/31 addresses
             additional_filters=["220.0.1.1/", "220.0.2.1/", "220.0.3.1/", "220.0.4.1/"]
         )
+    '''
 
     return True
 
@@ -904,12 +906,12 @@ def dpu_startup(duthosts, duthost, tbinfo, static_ipmacs_dict, ha_test_case):
 
     # Determine which IPs to ping based on duthost
     if len(duthosts) > 1 and duthost == duthosts[1]:
-        # For duthosts[1], ping 20.0.202.1, 20.1.202.1, ..., 20.7.202.1
+        # For duthosts[1], ping 20.0.201.1...20.0.201.8
         ip_list_to_ping = [f"169.254.200.{i+1}" for i in range(8)]
         logger.info(f"Using standby side midplane IPs for {duthost.hostname}: {ip_list_to_ping}")
     elif len(duthosts) > 1 and duthost == duthosts[0]:
-        # For duthosts[0], ping 18.0.202.1, ..., 18.7.202.1
-        ip_list_to_ping = [f"18.{i}.202.1" for i in range(8)]
+        # For duthosts[0], ping 20.0.200.1, ..., 20.0.200.8
+        ip_list_to_ping = [f"20.0.200.{i+1}" for i in range(8)]
         logger.info(f"Using active side IPs for {duthost.hostname}: {ip_list_to_ping}")
     else:
         # Fallback to original logic for single DUT setup
